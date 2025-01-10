@@ -1,0 +1,10 @@
+django==3.2.23
+djangorestframework==3.12.*
+geopy
+numpy
+numba
+scipy
+folium
+shapely
+pandas
+geopandas
