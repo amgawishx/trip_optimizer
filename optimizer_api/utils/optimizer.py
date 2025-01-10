@@ -152,7 +152,9 @@ def refuel_optimizer(
 
     # Calculate the total refueling cost
     total_refuel_cost = cost_function(
-        np.round(refuel_result.x), price_per_gallon, detour_distances
+        np.round(refuel_result.x),
+        price_per_gallon,
+        detour_distances[np.round(refuel_result.x) > 0],
     )
 
     # Filter out stations where no fuel was purchased
