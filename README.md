@@ -1,3 +1,5 @@
+![image](https://github.com/user-attachments/assets/b8c02a4a-0e16-49c4-8c12-c1934ef2e60e)
+
 # Route Optimization API
 
 This project provides a Django-based web API for determining the optimal refueling stops along a route between two addresses. It uses geospatial data, optimization techniques, and interactive maps to help users minimize travel costs and fuel consumption.
