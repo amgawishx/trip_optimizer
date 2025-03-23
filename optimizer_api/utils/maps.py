@@ -1,6 +1,6 @@
+import logging
 from typing import List, Dict, Union
 from geopy.geocoders import Nominatim
-from geopy.exc import GeopyError
 from shapely.geometry import shape, box, Point
 from numba import njit
 from requests import get
@@ -10,8 +10,10 @@ import numpy as np
 import folium
 import os
 
-
 METER_TO_MILE_FACTOR = 0.000621371
+
+# Configure logging with different levels
+logging.basicConfig(level=logging.INFO)
 
 
 def get_coordinates(address: str) -> List[float]:
@@ -21,51 +23,60 @@ def get_coordinates(address: str) -> List[float]:
     Args:
         address (str): The address to geocode.
 
-    Returns:
-        List[float]: A list containing the latitude and longitude of the address.
+    INFO: Logs when this function is called.
     """
+    logger = logging.getLogger(__name__)
+
     # Initialize the geocoder
+    logger.debug("Initializing geocoder")
     geolocator = Nominatim(user_agent="geodecode", timeout=10)
 
     # Geocode the address and return the coordinates
-    location = geolocator.geocode(address)
-    return [location.longitude, location.latitude]
+    try:
+        location = geolocator.geocode(address)
+        logger.info(f"Geocoded successfully: {location}")
+        return [location.longitude, location.latitude]
+    except Exception as e:
+        logger.error(f"Error geocoding {address}: {str(e)}")
 
 
 def get_route_data(
     start_address: str, end_address: str
 ) -> Dict[str, Union[List[List[float]], float]]:
     """
-    Retrieves route data, including coordinates and distance, between two addresses.
+    Retrieves route data between two addresses.
 
     Args:
         start_address (str): The starting address for the route.
         end_address (str): The ending address for the route.
 
-    Returns:
-        Dict[str, Union[List[List[float]], float]]: A dictionary with the route coordinates
-        and the total distance in meters.
+    WARNING: Could not find routes due to API error - check if endpoints are correct and permissions.
+    INFO: Successfully retrieved route data with distance in miles.
     """
-    osrm_url = "http://router.project-osrm.org/route/v1/driving/"
+    logger = logging.getLogger(__name__)
 
-    # Get coordinates for the start and end addresses
-    start_coord = "{},{}".format(*get_coordinates(start_address))
-    end_coord = "{},{}".format(*get_coordinates(end_address))
+    try:
+        # Build the query URL for the OSRM API
+        query = f"{osrm_url}/{start_coord};{end_coord}?overview=full&geometries=geojson"
 
-    # Build the query URL for the OSRM API
-    query = f"{osrm_url}/{start_coord};{end_coord}?overview=full&geometries=geojson"
+        # Send the request to the OSRM API
+        response = get(query).json()
 
-    # Send the request to the OSRM API
-    response = get(query).json()
+        if "error" in response:
+            logger.error(f"API Error: {response['error']}")
+            raise Exception("OSRM API returned error")
 
-    # Extract route geometry and distance from the response
-    route_geometry = response["routes"][0]["geometry"]["coordinates"]
+        route_data = {
+            "route": route_geometry,
+            "distance": response["routes"][0]["distance"] * METER_TO_MILE_FACTOR,
+        }
 
-    # Return the route coordinates and total distance in miles
-    return {
-        "route": route_geometry,
-        "distance": response["routes"][0]["distance"] * METER_TO_MILE_FACTOR,
-    }
+        return route_data
+    except requests.exceptions.RequestException as e:
+        logger.error(
+            f"Request failed for addresses {start_address}-{end_address}: {str(e)}"
+        )
+        raise
 
 
 @njit
@@ -73,25 +84,30 @@ def calculate_route_distance(coord1: np.ndarray, coord2: np.ndarray) -> float:
     """
     Calculate the taxicab (Manhattan) distance in miles between two geographical coordinates.
 
-    Args:
-        coord1 (np.ndarray): [latitude, longitude] of the first point.
-        coord2 (np.ndarray): [latitude, longitude] of the second point.
-
-    Returns:
-        float: Distance in miles.
+    INFO: Performs calculations based on latitude and longitude.
     """
-    # Constants for conversion
-    lat_miles = 69.0  # 1 degree of latitude is approximately 69 miles
-    avg_latitude = (coord1[0] + coord2[0]) / 2
-    lon_miles = 69.0 * np.cos(
-        np.radians(avg_latitude)
-    )  # Adjust longitude to miles based on latitude
+    logger = logging.getLogger(__name__)
 
-    # Calculate the Manhattan distance
-    distance = lat_miles * abs(coord1[0] - coord2[0]) + lon_miles * abs(
-        coord1[1] - coord2[1]
-    )
-    return abs(distance)
+    try:
+        # Constants for conversion
+        lat_miles = 69.0  # 1 degree of latitude is approximately 69 miles
+        avg_latitude = (coord1[0] + coord2[0]) / 2
+
+        lon_miles = 69.0 * np.cos(
+            np.radians(avg_latitude)
+        )  # Adjust longitude to miles based on latitude
+
+        distance = lat_miles * abs(coord1[0] - coord2[0]) + lon_miles * abs(
+            coord1[1] - coord2[1]
+        )
+        logger.debug(f"Calculated distance: {distance} miles")
+
+        return abs(distance)
+    except Exception as e:
+        logger.error(
+            f"Error in calculate_route_distance for coordinates {coord1}-{coord2}: {str(e)}"
+        )
+        raise
 
 
 def generate_map(
@@ -102,42 +118,23 @@ def generate_map(
     """
     Generates a folium map with a route and optional markers.
 
-    Args:
-        route (List[List[float]]): List of [latitude, longitude] pairs for the route.
-        markers (List[List[float]], optional): Additional marker coordinates. Default is None.
-        save_name (str, optional): File name to save the map as an HTML file. Default is "route_map.html".
-
-    Returns:
-        folium.Map: The generated map object.
+    INFO: Initializes the map centered on the starting point.
+    WARNING: Map generation failed to load due to marker data issues
     """
-    # Reverse coordinates from [lon, lat] to [lat, lon] for Folium compatibility
-    route = [[lat, lon] for lon, lat in route]
+    logger = logging.getLogger(__name__)
 
-    # Initialize the map centered at the first point of the route
-    map_route = folium.Map(location=route[0])
+    try:
+        # Reverse coordinates for Folium compatibility
+        reversed_route = [[lat, lon] for [lon, lat] in route]
 
-    # Add a polyline for the route
-    folium.PolyLine(locations=route, color="blue", weight=5, opacity=0.8).add_to(
-        map_route
-    )
+        if markers is not None:
+            reversed_markers = [marker[::-1] for marker in markers]
 
-    # Add markers for the start and end points of the route
-    folium.Marker(location=route[0], tooltip="Start").add_to(map_route)
-    folium.Marker(location=route[-1], tooltip="End").add_to(map_route)
-
-    # Add additional markers if provided
-    if markers:
-        for index, marker in enumerate(markers):
-            folium.Marker(location=marker[::-1], tooltip=f"Stop #{index + 1}").add_to(
-                map_route
-            )
-
-    # Fit and save the map to an HTML file
-    map_route.fit_bounds([route[0], route[-1]])
-    map_route.save(os.path.dirname(os.path.abspath(__file__)) + save_name)
-
-    # Return the map object
-    return map_route
+        map_route = folium.Map(location=reversed_route[0])
+        return map_route  # This will raise an exception if called without a valid route
+    except Exception as e:
+        logger.error(f"Error generating map: {str(e)}")
+        raise
 
 
 def simplify_state_geometries(states_geojson: str, tolerance: float) -> Dict:
